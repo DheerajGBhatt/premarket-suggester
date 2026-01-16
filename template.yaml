@@ -1,0 +1,140 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: AI Intraday Stock Suggester - Pre-Market News Analysis (Bedrock-powered)
+
+Globals:
+  Function:
+    Timeout: 900
+    MemorySize: 1024
+    Runtime: python3.12
+    Architectures:
+      - x86_64
+    Environment:
+      Variables:
+        POWERTOOLS_SERVICE_NAME: premarket-suggester
+        LOG_LEVEL: INFO
+        ENVIRONMENT: !Ref Environment
+
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues:
+      - dev
+      - staging
+      - prod
+    Description: Environment name
+
+  BedrockModelId:
+    Type: String
+    Default: s
+    Description: |
+      Bedrock model ID or inference profile to use.
+
+      Cross-Region Inference Profiles (Recommended for high availability):
+      - us.anthropic.claude-3-5-sonnet-20241022-v2:0 (US cross-region)
+      - us.anthropic.claude-3-haiku-20240307-v1:0 (US cross-region)
+      - eu.anthropic.claude-3-5-sonnet-20241022-v2:0 (EU cross-region)
+
+      Single-Region Model IDs:
+      - anthropic.claude-3-5-sonnet-20241022-v2:0
+      - anthropic.claude-3-haiku-20240307-v1:0
+      - meta.llama3-70b-instruct-v1:0
+      - amazon.titan-text-express-v1
+      - ai21.j2-ultra-v1
+      - cohere.command-text-v14
+
+Resources:
+  # ==================== Lambda Layer ====================
+  SharedLayer:
+    Type: AWS::Serverless::LayerVersion
+    Properties:
+      LayerName: shared_layer
+      Description: Shared code and dependencies
+      ContentUri: src/python/
+      CompatibleRuntimes:
+        - python3.12
+    Metadata:
+      BuildMethod: python3.12
+
+  # ==================== Watchlist API Lambda ====================
+  WatchlistAPIFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub ${AWS::StackName}-WatchlistAPI
+      CodeUri: src/functions/watchlist_api/
+      Handler: app.lambda_handler
+      Timeout: 900
+      MemorySize: 2048
+      Layers:
+        - !Ref SharedLayer
+      Environment:
+        Variables:
+          BEDROCK_MODEL_ID: !Ref BedrockModelId
+          USE_CROSS_REGION_INFERENCE: "true"
+          LLM_TEMPERATURE: "0.3"
+          LLM_MAX_TOKENS: "1000"
+          MAX_WATCHLIST_SIZE: "10"
+          MAX_NEWS_ITEMS: "20"
+          MAX_PARALLEL_WORKERS: "5"
+          BIAS_SCORE_THRESHOLD_HIGH: "2.5"
+          BIAS_SCORE_THRESHOLD_MEDIUM: "1.5"
+      Policies:
+        - Statement:
+            - Sid: BedrockInvokeModelAccess
+              Effect: Allow
+              Action:
+                - bedrock:InvokeModel
+              Resource:
+                # Foundation models (direct model IDs)
+                - !Sub arn:aws:bedrock:${AWS::Region}::foundation-model/*
+                - !Sub arn:aws:bedrock:*::foundation-model/*
+                # System-defined inference profiles (cross-region)
+                - !Sub arn:aws:bedrock:${AWS::Region}::inference-profile/*
+                - !Sub arn:aws:bedrock:*::inference-profile/*
+                # Application-scoped inference profiles
+                - !Sub arn:aws:bedrock:${AWS::Region}:${AWS::AccountId}:inference-profile/*
+                - !Sub arn:aws:bedrock:*:${AWS::AccountId}:inference-profile/*
+      Events:
+        GetWatchlist:
+          Type: Api
+          Properties:
+            RestApiId: !Ref WatchlistAPI
+            Path: /watchlist
+            Method: GET
+        HealthCheck:
+          Type: Api
+          Properties:
+            RestApiId: !Ref WatchlistAPI
+            Path: /health
+            Method: GET
+
+  # ==================== API Gateway ====================
+  WatchlistAPI:
+    Type: AWS::Serverless::Api
+    Properties:
+      Name: !Sub ${AWS::StackName}-API
+      StageName: !Ref Environment
+      Cors:
+        AllowMethods: "'GET, POST, OPTIONS'"
+        AllowHeaders: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+        AllowOrigin: "'*'"
+      Auth:
+        ApiKeyRequired: false
+      TracingEnabled: true
+      Tags:
+        Environment: !Ref Environment
+        Application: premarket-suggester
+
+Outputs:
+  APIEndpoint:
+    Description: API Gateway endpoint URL
+    Value: !Sub https://${WatchlistAPI}.execute-api.${AWS::Region}.amazonaws.com/${Environment}
+
+  WatchlistAPIFunctionArn:
+    Description: Watchlist API Lambda Function ARN
+    Value: !GetAtt WatchlistAPIFunction.Arn
+
+  BedrockModelUsed:
+    Description: Bedrock model ID being used
+    Value: !Ref BedrockModelId

@@ -1,0 +1,13 @@
+{
+  "version": "0",
+  "id": "test-event-id",
+  "detail-type": "Scheduled Event",
+  "source": "aws.events",
+  "account": "123456789012",
+  "time": "2024-01-12T08:30:00Z",
+  "region": "us-east-1",
+  "resources": [
+    "arn:aws:events:us-east-1:123456789012:rule/ScoringEngineSchedule"
+  ],
+  "detail": {}
+}

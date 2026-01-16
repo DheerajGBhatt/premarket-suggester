@@ -1,0 +1,10 @@
+{
+  "httpMethod": "GET",
+  "path": "/watchlist",
+  "headers": {
+    "Content-Type": "application/json"
+  },
+  "queryStringParameters": null,
+  "body": null,
+  "isBase64Encoded": false
+}

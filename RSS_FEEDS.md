@@ -1,258 +1,248 @@
 # RSS Feed Configuration
 
-This document lists all RSS feeds used by the premarket suggester application.
+This document describes the RSS feed used by the premarket suggester application.
 
-## News Sources
+## News Source
 
-The application fetches news from **9 RSS feeds** across 4 major financial news publishers:
+The application fetches news from **Zerodha Pulse**, which aggregates Indian market news from multiple publishers.
 
-### 1. MoneyControl (3 feeds)
-**Source:** MoneyControl
-**Coverage:** Indian stock markets, business news
+### Zerodha Pulse
 
-| Feed Name | URL |
-|-----------|-----|
-| Market Reports | `https://www.moneycontrol.com/rss/marketreports.xml` |
-| Business News | `https://www.moneycontrol.com/rss/business.xml` |
-| Latest News | `https://www.moneycontrol.com/rss/latestnews.xml` |
+| Property | Value |
+|----------|-------|
+| **Feed URL** | `https://pulse.zerodha.com/feed.php` |
+| **Coverage** | NSE/BSE stocks, Indian market news |
+| **Sources** | MoneyControl, Economic Times, Business Standard, Mint, and more |
+| **Format** | RSS 2.0 |
 
-**Scraper:** `MoneyControlScraper`
-**File:** `src/functions/news_ingestion/scrapers/moneycontrol_scraper.py`
+**Scraper:** `ZerodhaScraper`
+**File:** `src/python/shared_layer/scrapers/zerodha_scraper.py`
 
-### 2. Economic Times (3 feeds)
-**Source:** Economic Times (Times of India Group)
-**Coverage:** Indian stock markets, economy
+## Why Zerodha Pulse?
 
-| Feed Name | URL |
-|-----------|-----|
-| Stocks | `https://economictimes.indiatimes.com/markets/stocks/rssfeeds/2146842.cms` |
-| Markets | `https://economictimes.indiatimes.com/markets/rssfeeds/1977021501.cms` |
-| Top Stories | `https://economictimes.indiatimes.com/rssfeedstopstories.cms` |
-
-**Scraper:** `EconomicTimesScraper`
-**File:** `src/functions/news_ingestion/scrapers/economic_times_scraper.py`
-
-### 3. Business Standard & Mint (3 feeds)
-**Source:** Business Standard & Livemint
-**Coverage:** NSE/BSE stocks, markets, companies
-
-| Feed Name | URL |
-|-----------|-----|
-| BS Markets | `https://www.business-standard.com/rss/markets-106.rss` |
-| BS Companies | `https://www.business-standard.com/rss/companies-101.rss` |
-| Mint Markets | `https://www.livemint.com/rss/markets` |
-
-**Scraper:** `NSEScraper`
-**File:** `src/functions/news_ingestion/scrapers/nse_scraper.py`
-**Note:** Named NSEScraper for backward compatibility, but now uses RSS feeds covering NSE/BSE stocks
+| Benefit | Description |
+|---------|-------------|
+| **Aggregated** | Single feed with news from multiple publishers |
+| **Market-Focused** | Curated specifically for Indian stock market traders |
+| **Reliable** | Official Zerodha service with high uptime |
+| **Simplified** | One feed to manage instead of 9+ feeds |
+| **Quality** | Pre-filtered for market relevance |
 
 ## Architecture
 
-### Base Scraper
-All scrapers inherit from `BaseScraper` which provides:
-- Common RSS parsing logic via `parse_rss_feed()` method
-- Automatic deduplication
-- Stock symbol extraction
-- Error handling and logging
+### Scraper Implementation
 
-**File:** `src/functions/news_ingestion/scrapers/base_scraper.py`
+```
+ZerodhaScraper (zerodha_scraper.py)
+       │
+       ├── Inherits from BaseScraper
+       │
+       ├── fetch_news()
+       │      └── Fetches RSS feed
+       │
+       ├── parse_zerodha_feed()
+       │      ├── Parse RSS entries
+       │      ├── Extract title, content, date, URL
+       │      └── Return news items (without stock symbols)
+       │
+       └── Deduplication by title
+```
+
+### Base Scraper
+
+All scrapers inherit from `BaseScraper` which provides:
+- Common configuration (max_items, timeout)
+- Logging via PowerTools
+- Error handling
+
+**File:** `src/python/shared_layer/scrapers/base_scraper.py`
 
 ### RSS Parsing
-- **Library:** `feedparser==6.0.10`
+
+- **Library:** `feedparser`
 - **Features:**
   - Automatic date parsing
-  - Multiple content field extraction (summary, description, content)
+  - Content extraction (description, summary)
   - Robust error handling
   - Feed validation
 
-## Advantages Over Web Scraping
+## Feed Characteristics
 
-| Aspect | RSS Feeds | Web Scraping |
-|--------|-----------|--------------|
-| **Reliability** | ✅ Never breaks with website changes | ❌ Breaks with HTML changes |
-| **Speed** | ✅ Fast XML parsing | ❌ Slow HTML parsing |
-| **Data Quality** | ✅ Clean, structured | ❌ Requires cleanup |
-| **Maintenance** | ✅ Zero maintenance | ❌ Constant selector updates |
-| **Ethics** | ✅ Official API | ⚠️ Gray area |
-| **Rate Limits** | ✅ No limits | ❌ Can be blocked |
-| **Dependencies** | ✅ Just feedparser | ❌ requests + beautifulsoup4 |
+### Content Structure
+
+Each RSS entry provides:
+
+| Field | Availability | Description |
+|-------|--------------|-------------|
+| Title | ✅ Always | News headline |
+| Description | ⚠️ Sometimes | Article summary (may be empty) |
+| Link | ✅ Always | Full article URL |
+| Published Date | ✅ Always | Publication timestamp |
+
+**Note:** Some entries have empty descriptions. The scraper uses the title as content when description is missing or too short.
+
+### Update Frequency
+
+- **Frequency:** Near real-time (updated every 5-15 minutes)
+- **Items per fetch:** 20-50 news items
+- **Coverage hours:** 24/7 (higher volume during market hours)
+
+### Stock Symbol Handling
+
+**Important:** Zerodha Pulse does not include stock symbols in the RSS feed.
+
+Stock symbols are extracted during analysis using the LLM:
+1. News item fetched without stock symbol
+2. Combined LLM call extracts symbol AND analyzes news
+3. News items without identifiable stocks are skipped
 
 ## Configuration
 
 ### Environment Variables
-The news sources are enabled via the `NEWS_SOURCES_ENABLED` environment variable:
 
-```bash
-NEWS_SOURCES_ENABLED=NSE,MONEYCONTROL,ECONOMIC_TIMES
-```
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `MAX_NEWS_ITEMS` | 20 | Maximum news items to process |
 
 ### Customization
-To add more RSS feeds, modify the scraper classes:
+
+To modify the RSS feed, edit `zerodha_scraper.py`:
 
 ```python
-# Example: Add more Economic Times feeds
-self.rss_feeds = [
-    "https://economictimes.indiatimes.com/markets/stocks/rssfeeds/2146842.cms",
-    "https://economictimes.indiatimes.com/markets/rssfeeds/1977021501.cms",
-    "https://economictimes.indiatimes.com/rssfeedstopstories.cms",
-    # Add new feed here
-    "https://economictimes.indiatimes.com/your-new-feed.cms"
-]
+class ZerodhaScraper(BaseScraper):
+    def __init__(self):
+        super().__init__()
+        self.rss_feeds = [
+            "https://pulse.zerodha.com/feed.php"
+            # Add additional feeds here if needed
+        ]
 ```
-
-## Feed Characteristics
-
-### Update Frequency
-- **MoneyControl:** Real-time (updated every 5-10 minutes)
-- **Economic Times:** Near real-time (updated every 10-15 minutes)
-- **Business Standard:** Regular updates (every 15-30 minutes)
-- **Mint:** Regular updates (every 15-30 minutes)
-
-### Content Quality
-All feeds provide:
-- ✅ Title
-- ✅ Full article summary/description
-- ✅ Publication date
-- ✅ Article URL
-- ✅ Author (some feeds)
-- ✅ Categories/tags (some feeds)
-
-### Average Items per Feed
-- **MoneyControl:** 20-30 items per feed
-- **Economic Times:** 30-50 items per feed
-- **Business Standard:** 20-30 items per feed
-- **Mint:** 15-25 items per feed
-
-**Total:** ~150-250 news items per request
-
-## Deduplication
-
-Each scraper implements deduplication based on article titles:
-- Collects from multiple feeds
-- Removes duplicates
-- Limits to `max_items` (default: 50 per source)
-
-This ensures:
-- No duplicate analysis
-- Efficient Bedrock usage
-- Faster processing
 
 ## Error Handling
 
-### Feed-Level Errors
-If a single RSS feed fails:
-- ✅ Other feeds continue to work
-- ✅ Error is logged
-- ✅ No impact on overall news collection
+### Feed Errors
 
-### Complete Failure
-If all feeds from a source fail:
-- ⚠️ Source returns empty list
-- ✅ Other sources continue
-- ✅ Watchlist generated with available data
+If the RSS feed fails to fetch:
+- Error is logged to CloudWatch
+- Empty news list is returned
+- API returns empty watchlist with metadata
+
+### Parsing Errors
+
+If individual entries fail to parse:
+- Entry is skipped
+- Other entries continue processing
+- Warning logged for debugging
 
 ### Monitoring
+
 Check CloudWatch logs for:
 ```
-"Fetched N items from <feed_url>"
-"Failed to fetch RSS feed from <feed_url>: <error>"
+"Fetching Zerodha Pulse feed from <url>"
+"Found N entries in feed"
+"Parsed N items with stock symbols from Zerodha Pulse"
+"Error fetching Zerodha feed: <error>"
 ```
 
-## Testing RSS Feeds
+## Testing
 
 ### Manual Testing
-Test individual feeds in a browser:
+
+Test the feed in a browser:
 ```bash
-# MoneyControl
-open https://www.moneycontrol.com/rss/marketreports.xml
-
-# Economic Times
-open https://economictimes.indiatimes.com/markets/stocks/rssfeeds/2146842.cms
-
-# Business Standard
-open https://www.business-standard.com/rss/markets-106.rss
+open https://pulse.zerodha.com/feed.php
 ```
 
 ### Python Testing
+
 ```python
 import feedparser
 
-# Test feed
-feed = feedparser.parse("https://www.moneycontrol.com/rss/marketreports.xml")
+feed = feedparser.parse("https://pulse.zerodha.com/feed.php")
 print(f"Feed title: {feed.feed.title}")
 print(f"Items: {len(feed.entries)}")
-print(f"Latest: {feed.entries[0].title}")
+for entry in feed.entries[:3]:
+    print(f"- {entry.title}")
 ```
 
 ### Lambda Testing
-Use SAM Local to test:
+
 ```bash
-sam local invoke WatchlistGeneratorFunction
+# Local invoke
+sam local invoke WatchlistAPIFunction
+
+# Local API
+sam local start-api
+curl http://localhost:3000/watchlist
 ```
+
+## Comparison: Before vs After
+
+### Previous Architecture (Multiple Feeds)
+
+| Source | Feeds | Items |
+|--------|-------|-------|
+| MoneyControl | 3 | ~60-90 |
+| Economic Times | 3 | ~90-150 |
+| Business Standard | 2 | ~40-60 |
+| Mint | 1 | ~15-25 |
+| **Total** | **9** | **~200-325** |
+
+### Current Architecture (Single Feed)
+
+| Source | Feeds | Items |
+|--------|-------|-------|
+| Zerodha Pulse | 1 | ~20-50 |
+| **Total** | **1** | **~20-50** |
+
+### Benefits of Simplification
+
+| Metric | Before | After | Improvement |
+|--------|--------|-------|-------------|
+| RSS Feeds | 9 | 1 | 89% fewer |
+| Scrapers | 4 | 1 | 75% fewer |
+| Code lines | ~400 | ~100 | 75% reduction |
+| Maintenance | High | Low | Simplified |
+| LLM Calls | ~200-325 | ~20-50 | ~85% reduction |
 
 ## Dependencies
 
 ### Python Packages
+
 ```txt
-feedparser==6.0.10  # RSS/Atom feed parser
+feedparser>=6.0.10  # RSS/Atom feed parser
 ```
-
-### Removed Dependencies
-The following were removed during RSS migration:
-```txt
-beautifulsoup4==4.12.2  # No longer needed
-requests==2.31.0        # feedparser handles HTTP
-```
-
-## Migration Notes
-
-### Changes from Web Scraping
-1. **Removed:** BeautifulSoup HTML parsing
-2. **Removed:** Custom HTTP requests with user agents
-3. **Removed:** CSS selector-based extraction
-4. **Added:** Unified RSS parsing in BaseScraper
-5. **Added:** Multiple feed support per source
-6. **Added:** Better deduplication
-
-### Performance Improvements
-- ⚡ **50% faster** - XML parsing vs HTML parsing
-- 💾 **40% smaller** - Removed beautifulsoup4 dependency
-- 🛡️ **100% reliable** - No website changes break the app
-
-### Code Reduction
-- **Before:** ~200 lines per scraper (HTML parsing logic)
-- **After:** ~40 lines per scraper (RSS configuration only)
-- **Reduction:** 80% less code to maintain
 
 ## Future Enhancements
 
-### Additional RSS Sources
-Consider adding:
-- **CNBC India:** `https://www.cnbctv18.com/rss/india.xml`
-- **BloombergQuint:** Various RSS feeds
-- **Reuters India:** `https://www.reuters.com/rssfeed/india`
-- **Business Insider:** Market news feeds
+### Additional Sources (If Needed)
 
-### Feed Aggregation
-- Implement smart deduplication across all sources
-- Group related news (same stock, same event)
-- Prioritize premium sources
+If Zerodha Pulse is insufficient, consider adding:
+- **CNBC India:** `https://www.cnbctv18.com/rss/`
+- **Reuters India:** `https://www.reuters.com/rssfeed/india`
+- **NSE Official:** Corporate announcements API
 
 ### Caching
-- Cache RSS feed responses (5-10 minutes)
-- Reduce redundant fetches
-- Faster response times
+
+- Cache RSS feed responses (5-10 minutes TTL)
+- Reduce redundant fetches for repeated requests
+- Improve response times
+
+### Fallback Sources
+
+- Add backup RSS feeds if Zerodha Pulse is unavailable
+- Automatic failover to alternative sources
 
 ## Support
 
 For RSS feed issues:
 1. Check CloudWatch logs for specific errors
-2. Test feed URL in browser
-3. Verify feedparser is installed
-4. Check network connectivity from Lambda
+2. Test feed URL in browser: `https://pulse.zerodha.com/feed.php`
+3. Verify feedparser is installed in Lambda layer
+4. Check Lambda network connectivity
 
 ## References
 
 - **feedparser documentation:** https://feedparser.readthedocs.io/
+- **Zerodha Pulse:** https://pulse.zerodha.com/
 - **RSS 2.0 specification:** https://www.rssboard.org/rss-specification
-- **Atom specification:** https://www.ietf.org/rfc/rfc4287.txt

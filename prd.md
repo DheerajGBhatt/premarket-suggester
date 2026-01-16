@@ -20,7 +20,7 @@ Manual analysis is slow, subjective, and inconsistent.
 
 ## 2. Product Objective
 
-Build an AI-powered system that analyzes **pre-market news only** and generates a **high-confidence intraday watchlist** with directional bias before market open.
+Build an AI-powered system that analyzes **pre-market news only** and generates a **high-confidence intraday watchlist** with directional bias in real-time.
 
 The system does **not** predict prices or automate trades.
 
@@ -33,7 +33,7 @@ The system does **not** predict prices or automate trades.
 - Identify stocks likely to move intraday due to news
 - Classify direction (Bullish / Bearish / Neutral)
 - Estimate impact strength and confidence
-- Generate a concise watchlist before market open
+- Generate a concise watchlist on-demand
 
 ### Non-Goals
 
@@ -41,6 +41,7 @@ The system does **not** predict prices or automate trades.
 - No automated trade execution
 - No technical indicator analysis
 - No long-term investment recommendations
+- No data persistence
 
 ---
 
@@ -54,26 +55,30 @@ The system does **not** predict prices or automate trades.
 
 ## 5. Key User Workflow
 
-1. System ingests pre-market news (before 9:00 AM IST)
-2. AI analyzes news for intraday relevance
-3. Stocks are scored and ranked
-4. Trader receives a prioritized watchlist
-5. Trader confirms entries using price action after market open
+1. User calls the `/watchlist` API endpoint
+2. System fetches latest news from Zerodha Pulse RSS
+3. AI extracts stock symbols and analyzes news in a single optimized call
+4. Stocks are scored and ranked by bias score
+5. User receives a prioritized watchlist in JSON format
+6. Trader confirms entries using price action after market open
 
 ---
 
 ## 6. Data Sources
 
-### News Sources
+### News Source
 
-- NSE & BSE corporate announcements
-- Company earnings releases
-- Financial news portals (Moneycontrol, Economic Times – Markets)
-- Global market cues (US markets, commodities, indices)
+- **Zerodha Pulse RSS Feed**: `https://pulse.zerodha.com/feed.php`
+  - Aggregated Indian market news from multiple publishers
+  - Coverage: NSE/BSE stocks, corporate announcements, earnings, market news
+  - Sources include: MoneyControl, Economic Times, Business Standard, Mint
 
-### Constraints
+### Why Zerodha Pulse?
 
-- News must be published between previous market close and 9:00 AM IST
+- Single aggregated feed vs multiple RSS sources
+- Market-focused curation for Indian stocks
+- Reliable official Zerodha service
+- Structured RSS format
 
 ---
 
@@ -81,21 +86,25 @@ The system does **not** predict prices or automate trades.
 
 ### 7.1 News Ingestion
 
-- Scheduled pre-market ingestion (Cron-based)
-- Deduplication of identical news
-- Company symbol mapping
+- Real-time fetching on API request (stateless)
+- RSS feed parsing via `feedparser`
+- Deduplication by title
+- No persistent storage
 
-### 7.2 AI News Analysis
+### 7.2 AI News Analysis (Optimized Single Call)
 
-AI extracts structured insights from unstructured news.
+AI extracts stock symbols AND analyzes news in a **single LLM call** per news item:
 
-For each stock:
+For each news item:
 
-- Event type (Earnings, Order, Regulatory, Macro, etc.)
-- Expected intraday direction (Bullish / Bearish / Neutral)
-- Impact strength (1–5)
-- Confidence score (0–1)
-- One-line rationale
+- **Stock Symbol Extraction**: Identify NSE/BSE stock symbol from news text
+- **Event Type**: Earnings, Order, Regulatory, Macro, Other
+- **Direction**: Bullish / Bearish / Neutral
+- **Impact Strength**: 1–5 scale
+- **Confidence Score**: 0.0–1.0
+- **Rationale**: One-line explanation (max 200 chars)
+
+**Optimization**: Combined extraction + analysis reduces Bedrock API costs by ~50%.
 
 ### 7.3 Bias Scoring Engine
 
@@ -109,27 +118,47 @@ Threshold-based filtering:
 
 - Bias Score ≥ 2.5 → High priority
 - Bias Score 1.5–2.4 → Medium priority
+- Bias Score < 1.5 → Excluded from watchlist
 
 ### 7.4 Watchlist Generation
 
-- Ranked list of 5–10 stocks
+- Ranked list of 5–10 stocks (configurable)
 - Grouped by Bullish / Bearish
-- Sector tagging (optional)
+- Aggregated by stock symbol (multiple news = higher confidence)
+- Sorted by bias score descending
 
 ---
 
 ## 8. Output Format
 
-### Example Output
+### API Response
 
-```
-🔥 Intraday Watchlist – Pre-Market News
-
-1. TATASTEEL – BULLISH (High)
-   Reason: Strong earnings beat with margin expansion
-
-2. INFY – BEARISH (Medium)
-   Reason: Weak guidance and cautious outlook
+```json
+{
+  "success": true,
+  "data": {
+    "watchlist": [
+      {
+        "stock_symbol": "TATASTEEL",
+        "direction": "BULLISH",
+        "priority": "HIGH",
+        "bias_score": 4.25,
+        "reason": "Strong earnings beat with margin expansion",
+        "news_count": 3
+      }
+    ],
+    "bullish_stocks": [...],
+    "bearish_stocks": [...],
+    "metadata": {
+      "generated_at": "2024-01-12",
+      "total_news_fetched": 25,
+      "total_analyzed": 18,
+      "watchlist_size": 8,
+      "bullish_count": 5,
+      "bearish_count": 3
+    }
+  }
+}
 ```
 
 ---
@@ -138,10 +167,13 @@ Threshold-based filtering:
 
 The AI must:
 
-- Ignore long-term fundamentals
+- Extract valid NSE/BSE stock symbols from news text
+- Ignore indices (NIFTY, SENSEX), commodities, non-Indian stocks
 - Focus only on same-day tradability
+- Ignore long-term fundamentals
 - Avoid speculative language
 - Produce structured JSON output
+- Return null for stock_symbol if no relevant stock found
 
 ---
 
@@ -152,6 +184,7 @@ The AI must:
 - % of watchlist stocks showing ≥ 1% intraday move
 - Directional accuracy (Bullish vs Bearish)
 - Average move during first 90 minutes
+- API response time (target: < 3 minutes)
 
 ### Qualitative
 
@@ -165,75 +198,104 @@ The AI must:
 - News interpretation is probabilistic, not deterministic
 - False positives on low-liquidity stocks
 - Overreaction to already-priced-in news
+- Zerodha Pulse feed availability
 
 Mitigations:
 
-- Liquidity filters
 - Confidence thresholds
+- Minimum news count filter
 - Manual confirmation post-market open
+- Error handling for feed failures
 
 ---
 
-## 12. Tech Stack (Proposed)
+## 12. Tech Stack
 
-### Backend
+### Infrastructure
 
-- Python
-- LLM API (GPT / Claude / Gemini)
-- FastAPI
+- **AWS SAM** - Infrastructure as Code
+- **AWS Lambda** - Serverless compute (Python 3.12)
+- **API Gateway** - REST API endpoint
+- **AWS Bedrock** - LLM inference (model-agnostic)
 
-### Storage
+### AI Models (via Bedrock)
 
-- PostgreSQL (news + outputs)
+- Claude 3.5 Sonnet (recommended for quality)
+- Claude 3 Haiku (recommended for cost)
+- Llama 3 70B, Amazon Titan, AI21, Cohere (alternatives)
 
-### Delivery
+### Libraries
 
-- Web dashboard
-- Telegram / Slack alerts
+- `aws_lambda_powertools` - Logging, tracing
+- `pydantic` - Data validation
+- `feedparser` - RSS parsing
+- `boto3` - AWS SDK
+
+### Architecture
+
+- **Stateless**: No database, fresh analysis on every request
+- **Serverless**: Pay-per-use, auto-scaling
+- **Model-agnostic**: Switch Bedrock models via config
 
 ---
 
-## 13. MVP Scope (Phase 1)
+## 13. API Endpoints
+
+### GET /watchlist
+
+Generate fresh watchlist in real-time.
+
+- **Response Time**: 1-3 minutes
+- **Authentication**: None (can add API key if needed)
+- **CORS**: Enabled for all origins
+
+---
+
+## 14. Cost Estimation
+
+| Model | Per Request | Monthly (daily use) |
+|-------|-------------|---------------------|
+| Claude 3.5 Sonnet | ~$0.12 | ~$7/month |
+| Claude 3 Haiku | ~$0.04 | ~$4/month |
+| Llama 3 70B | ~$0.07 | ~$5/month |
+
+---
+
+## 15. MVP Scope (Implemented)
 
 Included:
 
-- Pre-market news ingestion
-- AI-based analysis
-- Watchlist generation
-- Manual validation
+- Real-time news ingestion from Zerodha Pulse
+- Combined AI-based symbol extraction + analysis
+- Bias scoring and watchlist generation
+- REST API endpoint
+- Cross-region Bedrock inference support
 
 Excluded:
 
 - Live market data
 - Trade execution
 - Backtesting
+- Scheduled/cron-based execution
+- Alerts (Telegram/Slack)
+- Web dashboard
 
 ---
 
-## 14. Future Enhancements
+## 16. Future Enhancements
 
 - Sector-level sentiment aggregation
 - Gap-up / gap-down validation
 - Post-market performance feedback loop
-- Hybrid model (news + early price action)
+- Scheduled execution with SNS alerts
+- Web dashboard for visualization
+- Multiple news source support
+- Caching layer for repeated requests
 
 ---
 
-## 15. Timeline
+## 17. Final Note
 
-| Phase                 | Duration |
-| --------------------- | -------- |
-| Data ingestion        | 1 day    |
-| AI analysis & prompts | 1–2 days |
-| Scoring & watchlist   | 1 day    |
-| Alerts & UI           | 1 day    |
-
-**Total MVP Time: ~5 days**
-
----
-
-## 16. Final Note
-
-This system is designed to **improve preparedness** , not replace trader judgment.
+This system is designed to **improve preparedness**, not replace trader judgment.
 
 > "The edge is knowing _what to watch_ before the bell rings."

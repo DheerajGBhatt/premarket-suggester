@@ -104,8 +104,6 @@ For each news item:
 - **Confidence Score**: 0.0–1.0
 - **Rationale**: One-line explanation (max 200 chars)
 
-**Optimization**: Combined extraction + analysis reduces Bedrock API costs by ~50%.
-
 ### 7.3 Bias Scoring Engine
 
 Compute a bias score:

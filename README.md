@@ -5,12 +5,14 @@ An AI-powered system that analyzes pre-market news and generates high-confidence
 ## Overview
 
 This application helps intraday traders identify high-probability trading opportunities by:
+
 - Ingesting news from Zerodha Pulse RSS feed (aggregated Indian market news)
 - Using **AWS Bedrock** models (Claude, Llama, Titan, etc.) to extract stock symbols and analyze news impact in a **single optimized LLM call**
 - Scoring and ranking stocks by potential impact
 - Generating a prioritized watchlist (5-10 stocks) with Bullish/Bearish bias
 
 **What it does NOT do:**
+
 - Price prediction
 - Automated trade execution
 - Technical indicator analysis
@@ -35,16 +37,6 @@ API Request → Watchlist Generator Lambda
               Return JSON Response
 ```
 
-**Key Features:**
-- ✅ **Zerodha Pulse**: Aggregated Indian market news via RSS
-- ✅ **AWS Bedrock**: Model-agnostic AI (Claude, Llama, Titan, etc.)
-- ✅ **Cross-Region Inference**: High availability with inference profiles
-- ✅ **Optimized LLM Calls**: Single call for extraction + analysis (50% cost reduction)
-- ✅ **No API Keys**: IAM-based authentication
-- ✅ **No Database**: Everything in-memory, no persistence
-- ✅ **Real-time**: Fresh analysis on every request
-- ✅ **Stateless**: Each request is independent
-- ✅ **Parallel Processing**: Concurrent news analysis with ThreadPoolExecutor
 
 ## Supported Bedrock Models
 
@@ -52,22 +44,22 @@ The application automatically adapts to different Bedrock models and supports **
 
 ### Cross-Region Inference Profiles (Recommended)
 
-| Model | Inference Profile ID | Use Case |
-|-------|---------------------|----------|
+| Model                                     | Inference Profile ID                             | Use Case                        |
+| ----------------------------------------- | ------------------------------------------------ | ------------------------------- |
 | **Claude 3.5 Sonnet** *(Default)* | `us.anthropic.claude-3-5-sonnet-20241022-v2:0` | Best quality, high availability |
-| **Claude 3 Haiku** | `us.anthropic.claude-3-haiku-20240307-v1:0` | Fast, cost-effective |
-| **EU Region** | `eu.anthropic.claude-3-5-sonnet-20241022-v2:0` | EU data residency |
+| **Claude 3 Haiku**                  | `us.anthropic.claude-3-haiku-20240307-v1:0`    | Fast, cost-effective            |
+| **EU Region**                       | `eu.anthropic.claude-3-5-sonnet-20241022-v2:0` | EU data residency               |
 
 ### Single-Region Model IDs
 
-| Model | Model ID | Use Case |
-|-------|----------|----------|
+| Model                       | Model ID                                      | Use Case                        |
+| --------------------------- | --------------------------------------------- | ------------------------------- |
 | **Claude 3.5 Sonnet** | `anthropic.claude-3-5-sonnet-20241022-v2:0` | Best quality, accurate analysis |
-| **Claude 3 Haiku** | `anthropic.claude-3-haiku-20240307-v1:0` | Fast, cost-effective |
-| **Llama 3 70B** | `meta.llama3-70b-instruct-v1:0` | Open source, good quality |
-| **Amazon Titan** | `amazon.titan-text-express-v1` | AWS native, lowest cost |
-| **AI21 Jurassic** | `ai21.j2-ultra-v1` | Alternative option |
-| **Cohere Command** | `cohere.command-text-v14` | Alternative option |
+| **Claude 3 Haiku**    | `anthropic.claude-3-haiku-20240307-v1:0`    | Fast, cost-effective            |
+| **Llama 3 70B**       | `meta.llama3-70b-instruct-v1:0`             | Open source, good quality       |
+| **Amazon Titan**      | `amazon.titan-text-express-v1`              | AWS native, lowest cost         |
+| **AI21 Jurassic**     | `ai21.j2-ultra-v1`                          | Alternative option              |
+| **Cohere Command**    | `cohere.command-text-v14`                   | Alternative option              |
 
 Simply change the `BedrockModelId` parameter to switch models!
 
@@ -76,11 +68,13 @@ Simply change the `BedrockModelId` parameter to switch models!
 The application fetches news from **Zerodha Pulse**, which aggregates Indian market news from multiple sources:
 
 ### Zerodha Pulse
+
 - **RSS Feed**: `https://pulse.zerodha.com/feed.php`
 - **Coverage**: NSE/BSE stocks, Indian market news
 - **Sources**: Aggregated from MoneyControl, Economic Times, Business Standard, Mint, and more
 
 **Why Zerodha Pulse?**
+
 - ✅ **Aggregated**: Single feed with news from multiple publishers
 - ✅ **Market-Focused**: Curated for Indian stock market traders
 - ✅ **Reliable**: Official Zerodha service
@@ -154,11 +148,13 @@ curl $API_URL/watchlist
 Base URL: `https://{api-id}.execute-api.{region}.amazonaws.com/{stage}`
 
 ### GET /watchlist
+
 Generate fresh watchlist in real-time.
 
 **Response Time:** 1-3 minutes (fetches & analyzes news in real-time)
 
 **Response:**
+
 ```json
 {
   "success": true,
@@ -192,11 +188,13 @@ Generate fresh watchlist in real-time.
 ### Switching Models
 
 **Option 1: At Deploy Time**
+
 ```bash
 sam deploy --parameter-overrides BedrockModelId=meta.llama3-70b-instruct-v1:0
 ```
 
 **Option 2: Update Environment Variable**
+
 ```bash
 aws lambda update-function-configuration \
     --function-name premarket-suggester-WatchlistGenerator \
@@ -204,6 +202,7 @@ aws lambda update-function-configuration \
 ```
 
 **Option 3: Update Stack**
+
 ```bash
 # Edit samconfig.toml
 parameter_overrides = "BedrockModelId=anthropic.claude-3-haiku-20240307-v1:0"
@@ -215,6 +214,7 @@ sam deploy
 ### Environment Variables
 
 Key variables:
+
 - `BEDROCK_MODEL_ID`: Bedrock model identifier (see supported models above)
 - `NEWS_SOURCES_ENABLED`: Comma-separated list of sources
 - `MAX_WATCHLIST_SIZE`: Maximum stocks in watchlist (default: 10)
@@ -252,60 +252,36 @@ sam local start-api --env-vars env.json
 
 ## Cost Estimation with Bedrock
 
-> **Optimized:** Combined extraction + analysis reduces Bedrock API costs by ~50% compared to separate calls.
-
 **Per Request (20-30 news items analyzed):**
 
-| Model | Lambda | Bedrock API | Total/Request |
-|-------|--------|-------------|---------------|
-| Claude 3.5 Sonnet | $0.02 | $0.08-0.12 | **$0.10-0.14** |
-| Claude 3 Haiku | $0.02 | $0.015-0.025 | **$0.035-0.045** |
-| Llama 3 70B | $0.02 | $0.04-0.06 | **$0.06-0.08** |
-| Amazon Titan | $0.02 | $0.005-0.01 | **$0.025-0.03** |
+| Model             | Lambda               | Bedrock API            | Total/Request |
+| ----------------- | -------------------- | ---------------------- | ------------- |
+| Claude 3.5 Sonnet | $0.02 | $0.08-0.12   | **$0.10-0.14**   |               |
+| Claude 3 Haiku    | $0.02 | $0.015-0.025 | **$0.035-0.045** |               |
+| Llama 3 70B       | $0.02 | $0.04-0.06   | **$0.06-0.08**   |               |
+| Amazon Titan      | $0.02 | $0.005-0.01  | **$0.025-0.03**  |               |
 
 **Monthly (with daily scheduled execution):**
 
-| Model | Daily | Monthly | + API Gateway | Total |
-|-------|-------|---------|---------------|-------|
-| Claude 3.5 Sonnet | $0.12 | $3.60 | +$3 | **~$7/month** |
-| Claude 3 Haiku | $0.04 | $1.20 | +$3 | **~$4/month** |
-| Llama 3 70B | $0.07 | $2.10 | +$3 | **~$5/month** |
-| Amazon Titan | $0.025 | $0.75 | +$3 | **~$4/month** |
+| Model             | Daily          | Monthly                  | + API Gateway | Total |
+| ----------------- | -------------- | ------------------------ | ------------- | ----- |
+| Claude 3.5 Sonnet | $0.12 | $3.60  | +$3 |**~$7/month** |               |       |
+| Claude 3 Haiku    | $0.04 | $1.20  | +$3 |**~$4/month** |               |       |
+| Llama 3 70B       | $0.07 | $2.10  | +$3 |**~$5/month** |               |       |
+| Amazon Titan      | $0.025 | $0.75 | +$3 |**~$4/month** |               |       |
 
 **Recommendation:** Start with Claude 3 Haiku for cost-effective quality!
 
-## Advantages of This Architecture
+## Architecture Benefits
 
-### Optimized LLM Usage
-
-✅ **Single LLM Call** - Combined extraction + analysis per news item
-✅ **50% Cost Reduction** - Compared to separate extraction and analysis calls
-✅ **Parallel Processing** - Concurrent analysis with ThreadPoolExecutor
-✅ **Cross-Region Inference** - High availability with inference profiles
-
-### Zerodha Pulse vs Multiple RSS Feeds
-
-✅ **Aggregated Source** - Single feed with news from multiple publishers
-✅ **Market-Focused** - Curated for Indian stock market
-✅ **Reliable** - Official Zerodha service
-✅ **Simplified Architecture** - One feed to manage
-
-### Bedrock vs Direct API Calls (Anthropic/OpenAI)
-
-✅ **No API Key Management** - IAM-based, no Secrets Manager needed
-✅ **Model Agnostic** - Switch models without code changes
-✅ **AWS Native** - Better integration with Lambda, CloudWatch
-✅ **Unified Billing** - All in AWS bill, easier tracking
-✅ **Better Compliance** - Data stays in AWS
-✅ **Cross-Region** - High availability with inference profiles
-
-### Stateless vs Database Architecture
-
-✅ **Simpler** - No database to manage
-✅ **Cheaper** - No DynamoDB costs
-✅ **Always Fresh** - Real-time data on every request
-✅ **Easier Debugging** - Single code path
-✅ **No Data Sync Issues** - Everything generated fresh
+- **Single LLM Call** - Combined extraction + analysis per news item
+- **Parallel Processing** - Concurrent analysis with ThreadPoolExecutor
+- **Cross-Region Inference** - High availability with inference profiles
+- **Aggregated News Source** - Zerodha Pulse provides curated market news
+- **Model Agnostic** - Switch Bedrock models without code changes
+- **IAM-based Auth** - No API keys to manage
+- **Stateless** - No database, fresh analysis on every request
+- **Serverless** - Pay-per-use with auto-scaling
 
 ## Monitoring
 
@@ -344,22 +320,27 @@ aws cloudwatch get-metric-statistics \
 ## Troubleshooting
 
 ### Bedrock model not accessible
+
 - **Issue**: AccessDeniedException
 - **Solution**: Enable model access in AWS Console > Bedrock > Model access
 
 ### Bedrock rate limit
+
 - **Issue**: ThrottlingException
 - **Solution**: Request quota increase or reduce request rate
 
 ### Model not available in region
+
 - **Issue**: ValidationException
 - **Solution**: Check model availability: `aws bedrock list-foundation-models --region us-east-1`
 
 ### Wrong output format
+
 - **Issue**: Different models return different formats
 - **Solution**: LLM client automatically handles different model formats
 
 ### Zerodha Pulse feed not fetching
+
 - **Issue**: Empty news items or feed errors
 - **Solution**:
   - Check CloudWatch logs for specific feed errors
@@ -367,6 +348,7 @@ aws cloudwatch get-metric-statistics \
   - Use `feedparser` error messages to debug feed issues
 
 ### Low news volume
+
 - **Issue**: Fewer news items than expected
 - **Solution**:
   - Zerodha Pulse may be slow to update during off-market hours
@@ -385,21 +367,25 @@ aws cloudwatch get-metric-statistics \
 ## Model Selection Guide
 
 **For Production (Best Quality):**
+
 - Use `anthropic.claude-3-5-sonnet-20241022-v2:0`
 - Most accurate analysis
 - Best structured output
 
 **For Cost Optimization:**
+
 - Use `anthropic.claude-3-haiku-20240307-v1:0`
 - 80% of Sonnet quality at 20% cost
 - Fast response times
 
 **For Open Source:**
+
 - Use `meta.llama3-70b-instruct-v1:0`
 - No vendor lock-in
 - Good quality
 
 **For Maximum Savings:**
+
 - Use `amazon.titan-text-express-v1`
 - AWS native, lowest cost
 - Acceptable quality for many use cases
@@ -407,6 +393,7 @@ aws cloudwatch get-metric-statistics \
 ## Support
 
 For issues:
+
 - Check CloudWatch logs
 - Verify Bedrock model access is enabled
 - Test Zerodha Pulse feed in browser

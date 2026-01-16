@@ -2,28 +2,28 @@
 
 ## System Name
 
-AI Intraday Stock Suggester – Pre-Market News Based (Live RSS)
+AI Intraday Stock Suggester – Pre-Market News Based
 
 ---
 
 ## 1. Architecture Overview
 
-The system is a **stateless, API-driven AWS-native application** designed to ingest  **live RSS feeds on demand** , analyze them using an LLM (Amazon Bedrock), and return an  **intraday watchlist response synchronously via API** .
+The system is a **stateless, API-driven AWS serverless application** that fetches news from Zerodha Pulse RSS feed, analyzes them using AWS Bedrock LLM, and returns an **intraday watchlist synchronously via API**.
 
-There is  **no scheduled execution, no background jobs, and no persistent database** . All computation happens at request time.
+There is **no scheduled execution, no background jobs, and no persistent database**. All computation happens at request time.
 
 ### High-Level Architecture
 
 ```
 Client (UI / Curl / Bot)
    ↓
-API Gateway
+API Gateway (REST)
    ↓
-FastAPI Lambda (AWS SAM)
+Lambda Function (Python 3.12)
    ↓
-Live RSS Fetch (In-memory)
+Zerodha Pulse RSS Feed
    ↓
-Amazon Bedrock (via Strands)
+AWS Bedrock (Combined Extract + Analyze)
    ↓
 Scoring & Ranking (In-memory)
    ↓
@@ -36,263 +36,329 @@ API Response (Watchlist JSON)
 
 ### Infrastructure
 
-* **AWS Cloud**
-* **AWS SAM** (Serverless Application Model)
-* **AWS Lambda** (Python 3.11 runtime)
-* **Amazon API Gateway**
+- **AWS SAM** - Infrastructure as Code
+- **AWS Lambda** - Python 3.12 runtime
+- **Amazon API Gateway** - REST API
+- **AWS Bedrock** - LLM inference
 
-### AI / LLM
+### AI Models (via Bedrock)
 
-* **Amazon Bedrock**
-* Model options:
-  * Claude Haiku (default, low latency)
-  * Claude Sonnet (optional, higher reasoning)
+- Claude 3.5 Sonnet (default, best quality)
+- Claude 3 Haiku (fast, cost-effective)
+- Llama 3 70B, Amazon Titan (alternatives)
 
-### SDK / Framework
+### Libraries
 
-* **Strands SDK** (Bedrock orchestration)
-* **FastAPI** (single API surface)
-* **Python**
+- `aws_lambda_powertools` - Logging, tracing, API routing
+- `pydantic` - Data validation
+- `feedparser` - RSS parsing
+- `boto3` - AWS SDK
 
-## 3. Infrastructure Design (AWS)
+---
 
-### 3.1 AWS SAM Stack
+## 3. Infrastructure Design (AWS SAM)
 
-The SAM stack defines a  **single Lambda-backed API** .
+### Resources
 
-Resources include:
+| Resource | Type | Purpose |
+|----------|------|---------|
+| WatchlistAPIFunction | Lambda | Main handler |
+| WatchlistAPI | API Gateway | REST endpoint |
+| SharedLayer | Lambda Layer | Shared code |
+| IAM Role | IAM | Bedrock access |
 
-* One Lambda function (FastAPI)
-* API Gateway
-* IAM role for Bedrock access
+### No Scheduled Jobs or Databases
 
-There are  **no scheduled jobs or databases** .
+The architecture is fully stateless with no:
+- EventBridge rules
+- DynamoDB tables
+- S3 buckets for state
 
 ---
 
 ## 4. Lambda Function
 
-### 4.1 WatchlistAPIFunction (Single Function)
+### WatchlistAPIFunction
 
- **Purpose** :
+**Purpose:**
+- Fetch news from Zerodha Pulse RSS
+- Extract stock symbols and analyze using Bedrock (single LLM call)
+- Score and rank stocks
+- Return intraday watchlist
 
-* Fetch live RSS feeds at request time
-* Deduplicate and normalize news
-* Invoke Amazon Bedrock via Strands
-* Score and rank stocks
-* Return intraday watchlist synchronously
+**Configuration:**
 
- **Trigger** :
+| Property | Value |
+|----------|-------|
+| Runtime | Python 3.12 |
+| Memory | 2048 MB |
+| Timeout | 900 seconds |
+| Handler | app.lambda_handler |
 
-* API Gateway (`GET /watchlist`)
-
- **Execution Characteristics** :
-
-* Cold start tolerant
-* Max execution time: 10–15 seconds
-* Entire flow runs in-memory
+**Trigger:**
+- API Gateway (`GET /watchlist`)
 
 ---
 
-### 4.2 NewsAnalysisFunction
+## 5. Code Structure
 
- **Purpose** :
+```
+src/
+├── functions/
+│   └── watchlist_api/
+│       └── app.py              # Lambda handler
+└── python/
+    └── shared_layer/
+        ├── __init__.py
+        ├── services.py         # WatchlistGeneratorService
+        ├── models.py           # Pydantic models
+        ├── utils.py            # Utility functions
+        ├── constants.py        # Configuration
+        ├── ai/
+        │   ├── llm_client.py   # Bedrock client
+        │   └── prompts.py      # LLM prompts
+        └── scrapers/
+            ├── base_scraper.py
+            └── zerodha_scraper.py
+```
 
-* Read aggregated RSS payload
-* Invoke Amazon Bedrock via Strands SDK
-* Extract structured intraday intelligence
+---
 
- **LLM Output Schema** :
+## 6. Data Flow
+
+### Request Flow
+
+```
+1. GET /watchlist request
+       ↓
+2. ZerodhaScraper.fetch_news()
+   - Fetch RSS from pulse.zerodha.com
+   - Parse entries (title, content, date, URL)
+   - Deduplicate by title
+       ↓
+3. WatchlistGeneratorService.analyze_all_news()
+   - Parallel processing (ThreadPoolExecutor)
+   - For each news item:
+     - Combined LLM call (extract symbol + analyze)
+     - Create AnalysisResult
+       ↓
+4. WatchlistGeneratorService.generate_watchlist()
+   - Group by stock symbol
+   - Calculate aggregated bias score
+   - Sort by bias score descending
+   - Limit to MAX_WATCHLIST_SIZE
+       ↓
+5. Return JSON response
+```
+
+### LLM Analysis (Single Call)
+
+Each news item is processed with a single Bedrock call that:
+1. Extracts NSE/BSE stock symbol from news text
+2. Classifies event type
+3. Determines direction (Bullish/Bearish/Neutral)
+4. Scores impact strength (1-5)
+5. Calculates confidence (0.0-1.0)
+6. Generates rationale
+
+**Output Schema:**
 
 ```json
 {
-  "symbol": "string",
-  "event_type": "EARNINGS | ORDER | REGULATORY | MACRO | OTHER",
-  "direction": "Bullish | Bearish | Neutral",
-  "impact_strength": 1,
-  "confidence": 0.0,
-  "reason": "string"
+  "stock_symbol": "TATASTEEL",
+  "event_type": "Earnings",
+  "direction": "BULLISH",
+  "impact_strength": 4,
+  "confidence": 0.85,
+  "rationale": "Strong Q3 earnings beat expectations"
 }
 ```
 
- **LLM Constraints** :
-
-* News is pre-market only
-* Focus strictly on same-day intraday tradability
-* Ignore long-term fundamentals
-
 ---
 
-### 4.3 ScoringFunction
+## 7. Scoring Engine
 
- **Purpose** :
+### Bias Score Calculation
 
-* Compute bias scores
-* Rank stocks
-* Generate final intraday watchlist
-
- **Scoring Logic** :
-
-```text
-Bias Score = impact_strength × confidence
+```
+Bias Score = Impact Strength × Confidence
 ```
 
- **Filtering Rules** :
+### Priority Thresholds
 
-* Bias Score ≥ 2.5 → High priority
-* Bias Score 1.5–2.4 → Medium priority
+| Bias Score | Priority |
+|------------|----------|
+| ≥ 2.5 | HIGH |
+| 1.5 - 2.4 | MEDIUM |
+| < 1.5 | Excluded |
 
----
+### Aggregation
 
-### 4.4 WatchlistAPIFunction
-
- **Purpose** :
-
-* Expose daily watchlist via REST API
-* Support dashboard and alert delivery
-
- **Framework** :
-
-* FastAPI
-
- **Endpoints** :
-
-* `GET /watchlist/today`
-* `GET /health`
+When multiple news items mention the same stock:
+- Highest bias score is used
+- News count is tracked
+- Latest news datetime preserved
 
 ---
 
-## 5. Amazon Bedrock & Strands Integration
+## 8. AWS Bedrock Integration
 
-### 5.1 Strands SDK Responsibilities
+### Client Configuration
 
-* Prompt construction
-* Model invocation
-* Response validation
-* Structured JSON parsing
-* Retry & fallback handling
+```python
+bedrock_runtime = boto3.client('bedrock-runtime')
+```
 
-### 5.2 Prompting Strategy
+### Model Support
 
-The prompt explicitly states:
+The LLM client supports multiple providers:
+- Anthropic (Claude)
+- Meta (Llama)
+- Amazon (Titan)
+- AI21 (Jurassic)
+- Cohere (Command)
 
-* News source is RSS
-* Market has not opened
-* Analysis is intraday-only
+### Cross-Region Inference
 
-This avoids hallucination and long-term bias.
-
----
-
-## 6. Data Handling Design
-
-* RSS news is fetched live per API call
-* No raw or processed news is persisted
-* Watchlist exists only in API response
-
-This enforces:
-
-* Zero state
-* No historical dependency
-* Simplified compliance
+Supports inference profiles for high availability:
+- `us.anthropic.claude-3-5-sonnet-20241022-v2:0`
+- `eu.anthropic.claude-3-5-sonnet-20241022-v2:0`
 
 ---
 
-## 7. Execution Model
+## 9. API Design
 
-* No scheduling
-* No orchestration
-* Client decides **when** to call the API
+### GET /watchlist
 
-Typical usage:
+**Response:**
 
-* Manual call between 8:30–9:10 AM IST
-* UI / bot can cache response externally if needed
+```json
+{
+  "success": true,
+  "data": {
+    "watchlist": [...],
+    "bullish_stocks": [...],
+    "bearish_stocks": [...],
+    "metadata": {
+      "generated_at": "2024-01-12",
+      "total_news_fetched": 25,
+      "total_analyzed": 18,
+      "watchlist_size": 8
+    }
+  }
+}
+```
 
-------|-----|
-| 08:00 | RSS ingestion |
-| 08:30 | LLM analysis |
-| 08:45 | Scoring & ranking |
-| 09:00 | Watchlist available |
-
----
-
-## 8. Security & IAM
-
-### IAM Principles
-
-* Least privilege
-* Single execution role
-
-### Required Permissions
-
-* `bedrock:InvokeModel`
-* CloudWatch Logs
-
-No database or scheduler permissions required.
+**Response Time:** 1-3 minutes
 
 ---
 
-## 9. Observability & Monitoring
+## 10. Security & IAM
 
-* CloudWatch Logs per Lambda
-* Metrics:
-  * RSS fetch failures
-  * Bedrock latency
-  * Cost per run
-* Dead Letter Queues (DLQ) for failures
+### IAM Permissions
+
+```yaml
+- bedrock:InvokeModel
+- logs:CreateLogGroup
+- logs:CreateLogStream
+- logs:PutLogEvents
+- xray:PutTraceSegments
+- xray:PutTelemetryRecords
+```
+
+### Security Features
+
+- IAM-based authentication (no API keys)
+- No data persistence
+- No secrets management required
 
 ---
 
-## 10. Error Handling & Resilience
+## 11. Observability
 
-* RSS fetch timeout (2–3 seconds per feed)
-* Skip unavailable feeds
-* Fallback to latest S3 cache if live RSS fails
-* Graceful degradation: publish empty watchlist if no strong news
+### Logging
+
+- AWS Lambda Powertools Logger
+- Structured JSON logs
+- Correlation IDs
+
+### Tracing
+
+- AWS X-Ray integration
+- Powertools Tracer
+
+### Key Metrics
+
+- Request duration
+- News fetch success rate
+- Bedrock API latency
+- Analysis success rate
 
 ---
 
-## 11. Deployment Flow
+## 12. Error Handling
+
+### RSS Feed Errors
+
+- Log error and continue
+- Return empty watchlist if all feeds fail
+
+### Bedrock Errors
+
+- Log error per news item
+- Skip failed items
+- Continue with successful analyses
+
+### Response Handling
+
+- Always return valid JSON
+- Include error details in response
+- Graceful degradation
+
+---
+
+## 13. Deployment
+
+### Commands
 
 ```bash
+# Build
 sam build
+
+# Deploy
 sam deploy --guided
+
+# Local testing
+sam local start-api
 ```
 
-Environments:
+### Environments
 
-* dev
-* prod
-
----
-
-## 12. Cost Considerations
-
-* RSS feeds are free
-* Bedrock calls limited to pre-market window
-* Batched LLM calls to minimize tokens
-
-Estimated MVP cost: **Very low (< $1/day)**
+- dev
+- staging
+- prod
 
 ---
 
-## 13. Future Enhancements
+## 14. Cost Estimation
 
-* Persist analyzed news (not raw RSS)
-* Sector-level sentiment aggregation
-* Opening-range confirmation (news + price action)
-* Post-market feedback loop
+| Component | Cost |
+|-----------|------|
+| Lambda | ~$0.02/request |
+| Bedrock (Claude Haiku) | ~$0.02/request |
+| API Gateway | ~$3/month |
+| **Total** | **~$4-7/month** |
 
 ---
 
-## 14. Summary
+## 15. Summary
 
-This updated design:
-
-* Uses **live RSS feeds** instead of persistent news storage
-* Persists only **actionable intelligence**
-* Remains cost-efficient, scalable, and production-ready
+This architecture provides:
+- **Stateless** - No database or persistent state
+- **Serverless** - Pay-per-use, auto-scaling
+- **Model-agnostic** - Switch Bedrock models via config
+- **Cost-effective** - Optimized LLM usage
+- **Maintainable** - Clean separation of concerns
 
 > The system focuses on one goal:
-> **Deliver a reliable, pre-market intraday watchlist driven purely by news.**
+> **Deliver a reliable, pre-market intraday watchlist driven by news analysis.**

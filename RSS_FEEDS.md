@@ -20,13 +20,11 @@ The application fetches news from **Zerodha Pulse**, which aggregates Indian mar
 
 ## Why Zerodha Pulse?
 
-| Benefit | Description |
-|---------|-------------|
-| **Aggregated** | Single feed with news from multiple publishers |
-| **Market-Focused** | Curated specifically for Indian stock market traders |
-| **Reliable** | Official Zerodha service with high uptime |
-| **Simplified** | One feed to manage instead of 9+ feeds |
-| **Quality** | Pre-filtered for market relevance |
+- **Aggregated**: Single feed with news from multiple publishers
+- **Market-Focused**: Curated specifically for Indian stock market traders
+- **Reliable**: Official Zerodha service with high uptime
+- **Simplified**: One feed to manage
+- **Quality**: Pre-filtered for market relevance
 
 ## Architecture
 
@@ -43,7 +41,7 @@ ZerodhaScraper (zerodha_scraper.py)
        ├── parse_zerodha_feed()
        │      ├── Parse RSS entries
        │      ├── Extract title, content, date, URL
-       │      └── Return news items (without stock symbols)
+       │      └── Return news items
        │
        └── Deduplication by title
 ```
@@ -74,10 +72,10 @@ Each RSS entry provides:
 
 | Field | Availability | Description |
 |-------|--------------|-------------|
-| Title | ✅ Always | News headline |
-| Description | ⚠️ Sometimes | Article summary (may be empty) |
-| Link | ✅ Always | Full article URL |
-| Published Date | ✅ Always | Publication timestamp |
+| Title | Always | News headline |
+| Description | Sometimes | Article summary (may be empty) |
+| Link | Always | Full article URL |
+| Published Date | Always | Publication timestamp |
 
 **Note:** Some entries have empty descriptions. The scraper uses the title as content when description is missing or too short.
 
@@ -89,9 +87,8 @@ Each RSS entry provides:
 
 ### Stock Symbol Handling
 
-**Important:** Zerodha Pulse does not include stock symbols in the RSS feed.
+Zerodha Pulse does not include stock symbols in the RSS feed. Stock symbols are extracted during analysis using the LLM:
 
-Stock symbols are extracted during analysis using the LLM:
 1. News item fetched without stock symbol
 2. Combined LLM call extracts symbol AND analyzes news
 3. News items without identifiable stocks are skipped
@@ -114,7 +111,6 @@ class ZerodhaScraper(BaseScraper):
         super().__init__()
         self.rss_feeds = [
             "https://pulse.zerodha.com/feed.php"
-            # Add additional feeds here if needed
         ]
 ```
 
@@ -140,7 +136,7 @@ Check CloudWatch logs for:
 ```
 "Fetching Zerodha Pulse feed from <url>"
 "Found N entries in feed"
-"Parsed N items with stock symbols from Zerodha Pulse"
+"Parsed N items from Zerodha Pulse"
 "Error fetching Zerodha feed: <error>"
 ```
 
@@ -176,62 +172,17 @@ sam local start-api
 curl http://localhost:3000/watchlist
 ```
 
-## Comparison: Before vs After
-
-### Previous Architecture (Multiple Feeds)
-
-| Source | Feeds | Items |
-|--------|-------|-------|
-| MoneyControl | 3 | ~60-90 |
-| Economic Times | 3 | ~90-150 |
-| Business Standard | 2 | ~40-60 |
-| Mint | 1 | ~15-25 |
-| **Total** | **9** | **~200-325** |
-
-### Current Architecture (Single Feed)
-
-| Source | Feeds | Items |
-|--------|-------|-------|
-| Zerodha Pulse | 1 | ~20-50 |
-| **Total** | **1** | **~20-50** |
-
-### Benefits of Simplification
-
-| Metric | Before | After | Improvement |
-|--------|--------|-------|-------------|
-| RSS Feeds | 9 | 1 | 89% fewer |
-| Scrapers | 4 | 1 | 75% fewer |
-| Code lines | ~400 | ~100 | 75% reduction |
-| Maintenance | High | Low | Simplified |
-| LLM Calls | ~200-325 | ~20-50 | ~85% reduction |
-
 ## Dependencies
 
-### Python Packages
-
 ```txt
-feedparser>=6.0.10  # RSS/Atom feed parser
+feedparser>=6.0.10
 ```
 
 ## Future Enhancements
 
-### Additional Sources (If Needed)
-
-If Zerodha Pulse is insufficient, consider adding:
-- **CNBC India:** `https://www.cnbctv18.com/rss/`
-- **Reuters India:** `https://www.reuters.com/rssfeed/india`
-- **NSE Official:** Corporate announcements API
-
-### Caching
-
+- Add backup RSS feeds for failover
 - Cache RSS feed responses (5-10 minutes TTL)
-- Reduce redundant fetches for repeated requests
-- Improve response times
-
-### Fallback Sources
-
-- Add backup RSS feeds if Zerodha Pulse is unavailable
-- Automatic failover to alternative sources
+- Add additional news sources if needed
 
 ## Support
 

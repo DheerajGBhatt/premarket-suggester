@@ -4,7 +4,7 @@ from datetime import datetime
 import feedparser
 from .base_scraper import BaseScraper, logger
 from shared_layer.models import NewsSource
-from shared_layer.utils import sanitize_text, extract_stock_symbols_with_llm
+from shared_layer.utils import sanitize_text
 
 
 class ZerodhaScraper(BaseScraper):

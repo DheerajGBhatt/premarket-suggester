@@ -27,7 +27,7 @@ Parameters:
 
   BedrockModelId:
     Type: String
-    Default: s
+    Default: us.anthropic.claude-3-5-sonnet-20241022-v2:0
     Description: |
       Bedrock model ID or inference profile to use.
 
@@ -101,12 +101,6 @@ Resources:
           Properties:
             RestApiId: !Ref WatchlistAPI
             Path: /watchlist
-            Method: GET
-        HealthCheck:
-          Type: Api
-          Properties:
-            RestApiId: !Ref WatchlistAPI
-            Path: /health
             Method: GET
 
   # ==================== API Gateway ====================

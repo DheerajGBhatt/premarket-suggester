@@ -6,8 +6,8 @@ from aws_lambda_powertools import Logger, Tracer
 
 from shared_layer.scrapers.zerodha_scraper import ZerodhaScraper
 from shared_layer.ai.llm_client import LLMClient
-from shared_layer.ai.prompts import SYSTEM_PROMPT, format_analysis_prompt
-from shared_layer.models import NewsItem, AnalysisResult, WatchlistItem, Direction, Priority, EventType, LLMAnalysisResponse
+from shared_layer.ai.prompts import SYSTEM_PROMPT, format_combined_analysis_prompt
+from shared_layer.models import NewsItem, AnalysisResult, WatchlistItem, Direction, Priority, EventType
 from shared_layer.utils import get_env_variable, determine_priority, get_current_date_ist
 from shared_layer.constants import MAX_WATCHLIST_SIZE, MIN_NEWS_COUNT_FOR_WATCHLIST
 
@@ -68,11 +68,11 @@ class WatchlistGeneratorService:
         logger.info(f"Fetched {stats['total_fetched']} news items")
         return all_news
 
-    @tracer.capture_method
-    def analyze_news_item(self, news_item: NewsItem) -> AnalysisResult:
-        """Analyze a single news item using LLM.
+    def _combined_extract_and_analyze(self, news_item: NewsItem) -> AnalysisResult:
+        """Extract stock symbol and analyze news in a single LLM call.
 
-        First extracts stock symbols if not present, then analyzes the news.
+        This method combines symbol extraction and news analysis into one call,
+        reducing Bedrock API costs by ~50%.
 
         Args:
             news_item: News item to analyze
@@ -81,187 +81,55 @@ class WatchlistGeneratorService:
             AnalysisResult: Analysis result, or None if no stock symbol found
         """
         try:
-            # Extract stock symbol if not already present
-            if not news_item.stock_symbol:
-                logger.debug(f"Extracting stock symbol for: {news_item.title[:50]}...")
-                from shared_layer.utils import extract_stock_symbols_with_llm
+            logger.debug(f"Combined extract+analyze for: {news_item.title[:50]}...")
 
-                symbols = extract_stock_symbols_with_llm(
-                    news_item.title,
-                    news_item.content,
-                    self.llm_client
-                )
-
-                if not symbols:
-                    logger.info(f"No stock symbol found, skipping: {news_item.title[:50]}...")
-                    return None
-
-                # Update news item with extracted symbol
-                news_item.stock_symbol = symbols[0]
-                logger.info(f"Extracted symbol: {news_item.stock_symbol}")
-
-            logger.info(f"Analyzing news: {news_item.stock_symbol} - {news_item.title[:50]}...")
-
-            # Format prompt
-            user_prompt = format_analysis_prompt(
-                stock_symbol=news_item.stock_symbol,
+            # Format combined prompt (no stock symbol needed upfront)
+            user_prompt = format_combined_analysis_prompt(
                 news_title=news_item.title,
                 news_content=news_item.content
             )
 
-            # Call LLM
-            llm_response = self.llm_client.analyze_news(
+            # Single LLM call for both extraction and analysis
+            llm_response = self.llm_client.extract_and_analyze(
                 system_prompt=SYSTEM_PROMPT,
                 user_prompt=user_prompt
             )
 
-            # Validate response
-            validated_response = LLMAnalysisResponse(**llm_response)
+            # If no stock symbol found, skip this news item
+            if not llm_response:
+                logger.debug(f"No stock symbol found, skipping: {news_item.title[:50]}...")
+                return None
 
             # Create analysis result
             analysis = AnalysisResult(
                 news_id=news_item.id,
-                stock_symbol=news_item.stock_symbol,
-                event_type=EventType(validated_response.event_type),
-                direction=Direction(validated_response.direction),
-                impact_strength=validated_response.impact_strength,
-                confidence=validated_response.confidence,
-                rationale=validated_response.rationale,
-                bias_score=validated_response.impact_strength * validated_response.confidence,
+                stock_symbol=llm_response['stock_symbol'],
+                event_type=EventType(llm_response.get('event_type', 'Other')),
+                direction=Direction(llm_response.get('direction', 'NEUTRAL')),
+                impact_strength=llm_response.get('impact_strength', 1),
+                confidence=llm_response.get('confidence', 0.5),
+                rationale=llm_response.get('rationale', 'No rationale provided'),
+                bias_score=llm_response.get('impact_strength', 1) * llm_response.get('confidence', 0.5),
                 news_published_at=news_item.published_at
             )
 
             logger.info(
-                f"Analysis complete for {analysis.stock_symbol}: "
+                f"Combined analysis complete: {analysis.stock_symbol} - "
                 f"{analysis.direction} (bias_score={analysis.bias_score:.2f})"
             )
 
             return analysis
 
         except Exception as e:
-            logger.error(f"Error analyzing news item: {str(e)}")
-            return None
-
-    def _extract_symbol_for_item(self, news_item: NewsItem) -> NewsItem:
-        """Extract stock symbol for a single news item.
-
-        Args:
-            news_item: News item to process
-
-        Returns:
-            NewsItem: Updated news item with stock_symbol populated
-        """
-        try:
-            if not news_item.stock_symbol:
-                from shared_layer.utils import extract_stock_symbols_with_llm
-
-                symbols = extract_stock_symbols_with_llm(
-                    news_item.title,
-                    news_item.content,
-                    self.llm_client
-                )
-
-                if symbols:
-                    news_item.stock_symbol = symbols[0]
-                    logger.debug(f"Extracted symbol: {news_item.stock_symbol} for {news_item.title[:50]}...")
-                else:
-                    logger.debug(f"No symbol found for: {news_item.title[:50]}...")
-        except Exception as e:
-            logger.warning(f"Error extracting symbol: {str(e)}")
-
-        return news_item
-
-    @tracer.capture_method
-    def extract_symbols_parallel(self, news_items: List[NewsItem]) -> List[NewsItem]:
-        """Extract stock symbols for all news items in parallel.
-
-        Args:
-            news_items: List of news items without stock symbols
-
-        Returns:
-            list: News items with stock symbols populated
-        """
-        logger.info(f"Extracting stock symbols in parallel for {len(news_items)} items (max_workers={self.max_workers})")
-
-        items_with_symbols = []
-
-        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-            # Submit all extraction tasks
-            future_to_item = {
-                executor.submit(self._extract_symbol_for_item, item): item
-                for item in news_items
-            }
-
-            # Collect results as they complete
-            for future in as_completed(future_to_item):
-                try:
-                    item = future.result()
-                    if item.stock_symbol:
-                        items_with_symbols.append(item)
-                except Exception as e:
-                    logger.error(f"Error in parallel symbol extraction: {str(e)}")
-
-        logger.info(f"Extracted symbols for {len(items_with_symbols)}/{len(news_items)} items")
-        return items_with_symbols
-
-    def _analyze_single_item(self, news_item: NewsItem) -> AnalysisResult:
-        """Analyze a single news item (without symbol extraction).
-
-        Args:
-            news_item: News item with stock_symbol already populated
-
-        Returns:
-            AnalysisResult or None
-        """
-        try:
-            logger.info(f"Analyzing: {news_item.stock_symbol} - {news_item.title[:50]}...")
-
-            # Format prompt
-            user_prompt = format_analysis_prompt(
-                stock_symbol=news_item.stock_symbol,
-                news_title=news_item.title,
-                news_content=news_item.content
-            )
-
-            # Call LLM
-            llm_response = self.llm_client.analyze_news(
-                system_prompt=SYSTEM_PROMPT,
-                user_prompt=user_prompt
-            )
-
-            # Validate response
-            validated_response = LLMAnalysisResponse(**llm_response)
-
-            # Create analysis result
-            analysis = AnalysisResult(
-                news_id=news_item.id,
-                stock_symbol=news_item.stock_symbol,
-                event_type=EventType(validated_response.event_type),
-                direction=Direction(validated_response.direction),
-                impact_strength=validated_response.impact_strength,
-                confidence=validated_response.confidence,
-                rationale=validated_response.rationale,
-                bias_score=validated_response.impact_strength * validated_response.confidence,
-                news_published_at=news_item.published_at
-            )
-
-            logger.info(
-                f"Analysis complete for {analysis.stock_symbol}: "
-                f"{analysis.direction} (bias_score={analysis.bias_score:.2f})"
-            )
-
-            return analysis
-
-        except Exception as e:
-            logger.error(f"Error analyzing news item: {str(e)}")
+            logger.error(f"Error in combined extract+analyze: {str(e)}")
             return None
 
     @tracer.capture_method
     def analyze_all_news(self, news_items: List[NewsItem]) -> List[AnalysisResult]:
-        """Analyze all news items in parallel with early termination to prevent timeouts.
+        """Analyze all news items in parallel using combined extraction+analysis.
 
-        Step 1: Extract stock symbols in parallel for all items
-        Step 2: Analyze items with symbols in parallel
+        Uses a single LLM call per news item to extract stock symbol and analyze,
+        reducing Bedrock API costs by ~50% compared to separate calls.
 
         Args:
             news_items: List of news items
@@ -271,8 +139,8 @@ class WatchlistGeneratorService:
         """
         stats = {
             'total': len(news_items),
-            'with_symbols': 0,
             'analyzed': 0,
+            'skipped': 0,
             'errors': 0
         }
 
@@ -280,24 +148,14 @@ class WatchlistGeneratorService:
             logger.warning("No news items to analyze")
             return []
 
-        # Step 1: Extract symbols in parallel
-        logger.info("Step 1: Extracting stock symbols in parallel...")
-        items_with_symbols = self.extract_symbols_parallel(news_items)
-        stats['with_symbols'] = len(items_with_symbols)
-
-        if not items_with_symbols:
-            logger.warning("No items with stock symbols found after extraction")
-            return []
-
-        # Step 2: Analyze in parallel
-        logger.info(f"Step 2: Analyzing {len(items_with_symbols)} items in parallel...")
+        logger.info(f"Analyzing {len(news_items)} items with combined extract+analyze (max_workers={self.max_workers})")
         analyses = []
 
         with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-            # Submit all analysis tasks
+            # Submit all combined extract+analyze tasks
             future_to_item = {
-                executor.submit(self._analyze_single_item, item): item
-                for item in items_with_symbols
+                executor.submit(self._combined_extract_and_analyze, item): item
+                for item in news_items
             }
 
             # Collect results as they complete
@@ -308,15 +166,15 @@ class WatchlistGeneratorService:
                         analyses.append(analysis)
                         stats['analyzed'] += 1
                     else:
-                        stats['errors'] += 1
+                        stats['skipped'] += 1
                 except Exception as e:
                     logger.error(f"Error in parallel analysis: {str(e)}")
                     stats['errors'] += 1
 
         logger.info(
             f"Analysis complete: {stats['analyzed']} successful, "
-            f"{stats['errors']} errors, "
-            f"{stats['with_symbols']} items had symbols out of {stats['total']} total"
+            f"{stats['skipped']} skipped (no symbol), "
+            f"{stats['errors']} errors out of {stats['total']} total"
         )
         return analyses
 

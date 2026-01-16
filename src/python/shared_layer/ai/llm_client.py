@@ -1,7 +1,7 @@
 """LLM client for news analysis using AWS Bedrock with cross-region inference support."""
 import json
 import os
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 from aws_lambda_powertools import Logger
 import boto3
 
@@ -99,6 +99,42 @@ class LLMClient:
 
         except Exception as e:
             logger.error(f"Error in Bedrock analysis: {str(e)}")
+            raise
+
+    def extract_and_analyze(self, system_prompt: str, user_prompt: str) -> Optional[Dict[str, Any]]:
+        """Extract stock symbol and analyze news in a single LLM call.
+
+        This method combines symbol extraction and news analysis into one call,
+        reducing Bedrock API costs by ~50%.
+
+        Args:
+            system_prompt: System prompt
+            user_prompt: User prompt with news details
+
+        Returns:
+            dict: Combined result with stock_symbol and analysis, or None if no symbol found
+
+        Raises:
+            Exception: If Bedrock call fails
+        """
+        try:
+            # Use the standard analyze_news method
+            result = self.analyze_news(system_prompt, user_prompt)
+
+            # Validate that we got a stock symbol
+            stock_symbol = result.get('stock_symbol')
+            if not stock_symbol or stock_symbol.lower() == 'null':
+                logger.info("No stock symbol found in combined analysis")
+                return None
+
+            # Normalize stock symbol to uppercase
+            result['stock_symbol'] = stock_symbol.upper()
+
+            logger.info(f"Combined analysis complete: {result['stock_symbol']} - {result['direction']}")
+            return result
+
+        except Exception as e:
+            logger.error(f"Error in combined extract and analyze: {str(e)}")
             raise
 
     def extract_stock_symbols(self, news_title: str, news_content: str) -> list[str]:

@@ -46,20 +46,6 @@ def get_watchlist() -> Dict[str, Any]:
         )
 
 
-@app.get("/health")
-def health_check() -> Dict[str, Any]:
-    """Health check endpoint.
-
-    Returns:
-        dict: Health status
-    """
-    return format_api_response(
-        success=True,
-        data={'status': 'healthy', 'service': 'premarket-suggester'},
-        status_code=200
-    )
-
-
 @logger.inject_lambda_context
 @tracer.capture_lambda_handler
 def lambda_handler(event: Dict[str, Any], context: LambdaContext) -> Dict[str, Any]:
